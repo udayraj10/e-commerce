@@ -1,0 +1,33 @@
+1. Order Summary
+--------------------------------------------------
+Orders Placed            : 10000
+Orders Confirmed         : 8541
+Orders Failed            : 1
+Payment Failed           : 960
+Out of Stock             : 498
+Total Bills Generated    : 8541
+--------------------------------------------------
+
+2. Inventory Summary
+
+Product                       	Sold      	Remaining 
+Wi-Fi 6 Router                	1199      	1         
+Adjustable Desk Lamp          	1199      	1         
+Laptop                        	1199      	1         
+Wireless Headphones           	1199      	1         
+27-inch Monitor               	1185      	15        
+Ergonomic Office Chair        	1169      	31        
+Gaming Mouse                  	1199      	1         
+Tablet 10-inch                	1199      	1         
+Desk Mat                      	1194      	6         
+Webcam 1080p                  	1199      	1         
+Mechanical Keyboard           	1191      	9         
+Smartwatch                    	1199      	1         
+External SSD 1TB              	1199      	1         
+Bluetooth Speaker             	1199      	1         
+Smartphone                    	1121      	79        
+Power Bank 20000mAh           	1199      	1         
+Noise-Cancelling Earbuds      	1199      	1         
+Microphone with Arm           	1199      	1         
+USB-C Hub                     	1199      	1         
+Graphics Drawing Tablet       	1199      	1         
