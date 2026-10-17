@@ -42,42 +42,66 @@ The application simulates thousands of concurrent customer requests, coordinatin
 2. **`OrderService`**: Core domain service handling order validation, inventory verification, simulated payment processing, order status transitions, and dispatching tasks to `TaskEngine`.
 3. **`Inventory`**: Thread-safe shared resource that holds stock levels inside a `Map<Integer, Integer>`, protected by a `ReentrantReadWriteLock`.
 4. **`TaskEngine`**: Dedicated asynchronous background worker pool managing I/O-heavy jobs without stalling main ordering threads.
-5. **`BillGenerationTask`**: A `Runnable` background task that formats and generates individual bill `.txt` files in 
-   `output/bills/`.
+5. **`BillGenerationTask`**: A `Runnable` background task that formats and generates individual bill `.txt` files in `output/bills/`.
 6. **`OrderLogs`**: A `Runnable` background task providing thread-synchronized append operations to `output/logs/order-logs.txt`.
 7. **`Stats`**: Centralized thread-safe telemetry store maintaining atomic counts for placed, confirmed, out-of-stock, and failed orders.
 8. **`FinalReport`**: Generates a consolidated summary of order outcomes and remaining inventory balances in `output/reports/final-report.txt`.
 
 ### Architecture Diagram
 
-```mermaid
-flowchart TD
-    A[Main] -->|Initializes & Seeds| B[(Inventory & Products)]
-    A -->|Submits 10,000 Tasks| C[Order Executor Pool]
-    
-    subgraph Order Processing
-        C --> D[OrderService.placeOrder]
-        D -->|Read Lock: checkStore| B
-        D -->|Write Lock: updateStore| B
-        D -->|processPayment| E[PaymentService]
-        D -->|Atomic Telemetry| F[Stats]
-    end
-
-    subgraph Background Execution
-        D -->|Dispatches Tasks| G[TaskEngine Pool]
-        G -->|Concurrent Write| H[BillGenerationTask -> output/bills/BILL_*.txt]
-        G -->|Synchronized Append| I[OrderLogs -> output/logs/order-logs.txt]
-    end
-
-    C -.->|1. shutdown & awaitTermination| A
-    G -.->|2. shutdown & awaitTermination| A
-    A -->|Produces Final Summary| J[FinalReport -> output/reports/final-report.txt]
+```text
++-----------------------------------------------------------------------------------+
+|                                       Main                                        |
+|  - Cleans legacy output/ directory                                                |
+|  - Seeds Products & Inventory (1000 units/prod)                                   |
+|  - Generates Customers                                                            |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                      Submits concurrent order tasks
+                                          v
++-----------------------------------------------------------------------------------+
+|                        Order Executor (ThreadPool)                                |
+|                                                                                   |
+|   Worker Thread 1      Worker Thread 2      Worker Thread 3 ... Worker Thread N   |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                                   OrderService                                    |
+|                                                                                   |
+|  1. Read Lock: checkStore(productId, quantity)  ----->  [ Inventory (Shared) ]    |
+|  2. Write Lock: updateStore(productId, quantity) ----->  [ ReentrantReadWriteLock] |
+|  3. Payment Processing                           ----->  [ PaymentService (90/10) ]|
+|  4. Telemetry Tracking                           ----->  [ Stats (AtomicInteger)  ]|
++-----------------------------------------+-----------------------------------------+
+                                          |
+                      Dispatches background I/O tasks
+                                          v
++-----------------------------------------------------------------------------------+
+|                            TaskEngine (ThreadPool)                                |
+|                                                                                   |
+|     +----------------------------+             +----------------------------+     |
+|     |     BillGenerationTask     |             |         OrderLogs          |     |
+|     |  (Independent File I/O)    |             |    (Thread-Safe Lock)      |     |
+|     +--------------+-------------+             +--------------+-------------+     |
+|                    |                                          |                   |
+|                    v                                          v                   |
+|      output/bills/BILL_*.txt                       output/logs/order-logs.txt     |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                  Both Executors Terminated via awaitTermination()
+                                          v
++-----------------------------------------------------------------------------------+
+|                                   FinalReport                                     |
+|  - Reads remaining stock from Inventory                                           |
+|  - Reads atomic statistics from Stats                                             |
+|  - Writes consolidated summary to output/reports/final-report.txt                  |
++-----------------------------------------------------------------------------------+
 ```
 
 ### Execution Step-by-Step Flow
 1. **Startup & Cleanup**: `Main` executes `deleteOutputFolderIfExists()` to wipe previous artifacts.
-2. **Data Seeding**: Seeds product catalogs and initializes stock levels (e.g., 1,200 units per product) in 
-   `Inventory`, followed by generating customer records.
+2. **Data Seeding**: Seeds product catalogs and initializes stock levels (e.g., 1,200 units per product) in `Inventory`, followed by generating customer records.
 3. **Concurrent Submission**: Customer orders are submitted as concurrent tasks to the primary `orderExecutor`.
 4. **Stock Check**: `OrderService` acquires `readLock` to verify if inventory satisfies the requested quantity. If insufficient, marks `OUT_OF_STOCK`, updates stats, logs, and exits.
 5. **Stock Deduction**: `OrderService` acquires `writeLock` to deduct inventory. If deduction fails, marks `ORDER_FAILED`, updates stats, logs, and exits.
@@ -125,10 +149,8 @@ To guarantee that products are never oversold under high concurrency:
 ---
 
 ## 8. Background Task Management
-- **Asynchronous Execution**: Logging and bill generation are computationally independent of the order fulfillment loop.
-  Offloading them to `TaskEngine` ensures order threads return quickly.
-- **Independent Bill Generation**: Each `BillGenerationTask` writes to an isolated file (`BILL_<orderId>.txt`), 
-  allowing worker threads to write bills simultaneously without thread contention or locks.
+- **Asynchronous Execution**: Logging and bill generation are computationally independent of the order fulfillment loop. Offloading them to `TaskEngine` ensures order threads return quickly.
+- **Independent Bill Generation**: Each `BillGenerationTask` writes to an isolated file (`BILL_<orderId>.txt`), allowing worker threads to write bills simultaneously without thread contention or locks.
 - **Thread-Safe Shared Logging**: `OrderLogs` shares a single destination file (`output/logs/order-logs.txt`). File writes are wrapped in `synchronized (LOCK)` using `StandardOpenOption.APPEND` to avoid inter-thread interleaved log corruption.
 - **Barrier Synchronization Before Reporting**:
   To prevent the final report from printing incomplete numbers, `Main` applies a sequential shutdown barrier:
@@ -145,9 +167,7 @@ To guarantee that products are never oversold under high concurrency:
 ## 9. Benchmark Results
 
 ### Benchmark Summary
-> **Benchmarked different thread-pool configurations for order processing and background task execution. Results 
-> varied across repeated runs, demonstrating that increasing thread counts does not guarantee better performance. 
-> Execution time depends on thread scheduling, workload characteristics, resource contention, and I/O.**
+> **Benchmarked different thread-pool configurations for order processing and background task execution. Results varied across repeated runs, demonstrating that increasing thread counts does not guarantee better performance. Execution time depends on thread scheduling, workload characteristics, resource contention, and I/O.**
 
 ### Key Observations
 - **Thread Count vs. Core Saturation**: Increasing thread counts beyond available hardware CPU cores introduced context-switching overhead and thread scheduling latency rather than linear throughput gains.
